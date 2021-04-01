@@ -1,0 +1,285 @@
+# "." is important and equals "source"
+# Functionality of sections described in echo statements
+# Assumes all requirement files are in the execution folder (relative path)
+#region Global Variabels
+# CONF = configuration files folder
+CONF=$SETUP
+AUTHFILE=credentials.auth
+#endregion
+#region Various utility methods
+arr_length() {
+	i=0
+	for var; do ((i++)); done
+	echo $i
+}
+arg_passed() {
+	arr_length $@
+}
+file_exist(){
+	[[ -f "$1" ]] && return
+	false
+}
+folder_not_empty(){
+	if [[ -d "$@" ]]; then
+		[[ ! -z $(ls "$@") ]] && return
+	fi
+	false
+}
+current_time(){
+	date +'%H:%M:%S %P'
+}
+ip_of_interface_match(){
+	echo $(ip add | grep $1| awk 'BEGIN {FS="( |/)"} FNR == 2 {print $6}')
+}
+delayed_event(){
+	printf "$1 in ..."
+	i=$2
+		while [ $i -ge 0 ];do
+		sleep 1
+		printf "\r                                "
+		printf "\r$1 in $i"
+    ((i--))
+	done
+	printf "\n"
+}
+wait_if_lt(){
+    if [ $1 -lt $2 ]; then
+        echo "Waiting ..."
+        wait
+    fi
+}
+
+remove_if_exist(){
+    if [ -d "$1" ]; then
+        rm -rf $1
+    fi
+}
+old_files_sorted(){
+	old_files=($(find $APP/syncable_data/ -type d -mtime $DAYS_OLD| awk '{print length($0), $0}' | sort -n | awk '{print $2}'))
+}
+from_end_to_start(){
+    let INDEX=$1-1    
+    array=("$@")
+    while [  $INDEX -ge 0 ]; do
+        let PREV_INDEX=INDEX+1
+        current_length=$(awk '{print length($0)'} <<< ${old_files[$INDEX]})
+        prev_length=$(awk '{print length($0)'} <<< ${old_files[$PREV_INDEX]})
+        wait_if_lt $current_length $prev_length
+        remove_if_exist "${old_files[$INDEX]}" &
+        let INDEX-=1
+    done
+}
+wait_while_dir_exist(){
+	DIR=$1
+	ANIMATION=("|" "/" "—" "\\" "|")
+	anim_index=0
+	while test -d "$DIR"; do
+	if [ $anim_index -eq 5 ]; then anim_index=0; fi
+	echo -ne "  Waiting for another install to finish  \r"
+	echo -ne ${ANIMATION[$anim_index]}
+	let "anim_index+=1"
+	sleep 0.04s
+	done
+}
+#endregion
+#region NOT SECURE! (and need credentials.auth file)
+# usage: s_sudo command arg1 arg2 arg3
+authorise_for_awhile() {
+	.  $AUTHFILE
+	echo "$PASSWORD" | sudo -S date
+}
+folder_not_empty_server() {
+	.  $AUTHFILE
+	sshpass -p "$SERVER_PASSWORD" ssh -p $SERVER_PORT "$SERVER_USER@$SERVER" "[ -d $@ ]"
+	if [ $? -ne 1 ];then
+		ls_string=$(sshpass -p "$SERVER_PASSWORD" ssh -p $SERVER_PORT "$SERVER_USER@$SERVER" "ls $@")
+		[ ! -z "$ls_string" ] && return
+	fi
+	false
+}
+s_sudo() {
+	.  $AUTHFILE
+	command="$@"
+	echo "$PASSWORD" | sudo -S -k sh -c "$command"
+}
+# usage: as_root "string to execute"
+as_root(){
+	.  $AUTHFILE
+	command="$@"
+	echo "$PASSWORD" | sudo -S su root sh -c "$command"
+}
+fix_mail_config_centos(){
+	.  $AUTHFILE	
+	sed -i "s|^set smtp=.*$|set smtp=$MAIL_SERVER|g" $HOME/configs/mail.rc 
+	sed -i "s|^set smtp-auth-user=.*$|set smtp-auth-user=$MAIL_USER|g" $HOME/configs/mail.rc 
+	sed -i "s|^set smtp-auth-password=.*$|set smtp-auth-password=$MAIL_PASSWORD|g" $HOME/configs/
+	echo "$PASSWORD" | sudo -S cp $HOME/configs/mail.rc /etc/mail.rc
+}
+fix_mail_config_debian(){
+	.  $AUTHFILE
+	USER_MAIL_DOMEN=$(echo $MAIL_USER | awk -F@ '{ print $2}')
+	sed -i "s|^dc_readhost=.*$|dc_readhost='$USER_MAIL_DOMEN'|g" $HOME/configs/update-exim4.conf.conf
+	sed -i "s|^dc_smarthost=.*$|dc_smarthost='$MAIL_SERVER'|g" $HOME/configs/update-exim4.conf.conf 
+	as_root "echo \"*:$MAIL_USER:$MAIL_PASSWORD\" >> /etc/exim4/passwd.client"
+	as_root "echo \"$USER:$MAIL_USER\" >> /etc/email-addresses"
+	echo "$PASSWORD" | sudo -S cp $HOME/configs/update-exim4.conf.conf /etc/exim4/update-exim4.conf.conf
+	echo "$PASSWORD" | sudo -S cp $HOME/configs/exim4.conf.localmacros /etc/exim4/exim4.conf.localmacros
+	echo "$PASSWORD" | sudo -S cp $HOME/configs/exim4.conf.template /etc/exim4/exim4.conf.template
+	echo "$PASSWORD" | sudo -S update-exim4.conf
+	echo "$PASSWORD" | sudo -S systemctl restart exim4
+}
+copy_id() {
+	.  $AUTHFILE
+	sshpass -p "$SERVER_PASSWORD" ssh-copy-id "$SERVER_USER@$SERVER" -p $SERVER_PORT
+}
+server(){
+	.  $AUTHFILE
+	sshpass -p "$SERVER_PASSWORD" ssh -p $SERVER_PORT "$SERVER_USER@$SERVER" "$@"
+}
+scp_loc_rem() {
+	.  $AUTHFILE
+	scp -P $SERVER_PORT "$1" "$SERVER_USER@$SERVER:$2"
+}
+scp_rem_loc() {
+	.  $AUTHFILE
+	scp -P $SERVER_PORT "$SERVER_USER@$SERVER:$1" "$2" 
+}
+import_server_fingerprint() {
+	.  $AUTHFILE
+	echo "$SERVER_FINGERPRINT" >> $HOME/.ssh/known_hosts
+}
+import_bitbucket_fingerprint() {
+	.  $AUTHFILE
+	echo "$BITBUCKET_FINGERPRINT" >> $HOME/.ssh/known_hosts
+}
+create_new_ssh_key() {
+	if [ ! -d "$HOME/.ssh" ]; then
+    	mkdir $HOME/.ssh
+	fi
+	yes y | ssh-keygen -t ed25519 -q -f $HOME/.ssh/id_ed25519 -N ""
+}
+#region Bitbucket API
+# Need to get code first from
+# https://bitbucket.org/site/oauth2/authorize?client_id={client_id}&response_type=code
+# Or implement some back-end somewhere with my own API lol
+get_request_token_from_bitbucket() {
+	.  $AUTHFILE
+	curl -X POST -u "$BITBUCKET_CLIENT_ID:$BITBUCKET_SECRET" https://bitbucket.org/site/oauth2/access_token -d grant_type=authorization_code -d code=$BITBUCKET_CODE > $CONF/new_token.json
+	cp $CONF/new_token.json $CONF/token.json
+}
+token_error(){
+	field=$(awk 'BEGIN {FS="(\": \"|\", \"|\"\})"} {print $3}' $CONF/token.json)
+	[[ "$field" =~ error ]] && return
+	false
+}
+read_token(){
+	if token_error; then	
+		echo "Errors in token, retrieve again"
+		return
+	fi
+	token=$(awk 'BEGIN {FS="(\": \"|\", \"|\"\})"} {print $4}' $CONF/token.json)
+	echo $token
+}
+read_refresh_token(){
+	token=$(awk 'BEGIN {FS="(\": \"|\", \"|\"\})"} {print $10}' $CONF/new_token.json)
+	echo $token
+}
+refresh_token(){
+	.  $AUTHFILE
+	curl -X POST -u "$BITBUCKET_CLIENT_ID:$BITBUCKET_SECRET" "https://bitbucket.org/site/oauth2/access_token" -d grant_type=refresh_token -d refresh_token=$(read_refresh_token) > $CONF/token.json
+}
+get_user(){	
+	refresh_token
+	curl -X GET "https://api.bitbucket.org/2.0/user?access_token=$(read_token)" > $CONF/user.json
+}
+get_user_id(){
+	get_user
+	echo $(awk 'BEGIN {FS="(\": \"|\", \"|\"\})"} {print $20}' $CONF/user.json)
+}
+upload_ssh(){
+	.  $AUTHFILE
+	KEY=$(cat $HOME/.ssh/id_ed25519.pub)
+	curl -u "$BITBUCKET_LOGIN:$BITBUCKET_APPPASSWORD" -X POST -H "Content-Type: application/json" -d "{\"key\": \"$KEY\"}" "https://api.bitbucket.org/2.0/users/$(get_user_id)/ssh-keys" > $CONF/ssh_upload_respond.json
+}
+clone_my(){
+	repo=$1
+	.  $AUTHFILE
+	git clone "https://x-token-auth:$(read_token)@bitbucket.org/$BITBUCKET_LOGIN/$repo.git" $2 >> $CONF/git_reponse.log
+}
+#endregion
+s_install(){
+	.  $AUTHFILE
+	echo "$PASSWORD" | sudo -S -k apt-get install -y "$@"
+}
+is_service_running(){
+	.  $AUTHFILE
+	true
+	echo "$PASSWORD" | sudo -S -k systemctl is-active --quiet "$@" && return
+	false
+}
+# DO NOT FORGET TO AT LEAST RUN THIS IF USING ANYTHING FROM NOT SECURE
+clear_history(){
+	rm -rf  $CONF
+	history -c
+	history -w
+}
+#endregion
+#region CUPS CLI managment
+add_printer(){
+	# -o PageSize=Legal 
+	# -o printer-error-policy=retry-current-job
+	printername=$1
+	URI=$2
+	model=$3
+	/usr/sbin/lpadmin -p $printername -E -v $URI -m $model
+}
+debug_logging(){
+	/usr/sbin/cupsctl --debug-logging
+	#cupsctl --no-debug-logging
+	#cupsctl --remote-admin --remote-any
+}
+list_installed_drivers(){
+	/usr/sbin/lpinfo -m
+}
+list_aviable_usb_printer(){
+	/usr/sbin/lpinfo -v | grep usb
+}
+list_printer_options(){
+	lpoptions -l
+}
+#endregion
+#region Not tested copypasta
+exit_on_error() {
+    exit_code=$1
+    last_command=${@:2}
+    if [ $exit_code -ne 0 ]; then
+        >&2 echo "\"${last_command}\" command failed with exit code ${exit_code}."
+        exit $exit_code
+    fi
+	## ^ Usage:
+	## 1. enable !! command completion:
+	# set -o history -o histexpand
+	## ^ allows us to use !! and have it expand to the last command executed.
+	## For example, we can check explicitly for an error like this
+	# ls --fake-option
+	# exit_on_error $? !!
+	## This will pass the exit code of the previous command
+	## as the first argument to exit_on_error() and
+	## then !! will expand to
+	## ls --fake-option as the second and third arguments.
+	## The second and third arguments–plus any further arguments
+	## if they were there–are then recombined by slicing ${@:2}.
+}
+set_traps(){
+	echo "Setting up traps for errors"
+	set -e
+	trap 'last_command=$current_command; current_command=$BASH_COMMAND' DEBUG
+	echo "Message before exiting"
+	trap 'echo "\"${last_command}\" command exit code $?."' EXIT
+}
+#endregion
+#region Varous soft-specific methods
+chromium_no_password_fix(){
+	cp $HOME/configs/no-password-management.json /etc/chromium.d/no-password-management.json
+}
+#endregion
