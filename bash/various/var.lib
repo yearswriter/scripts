@@ -1,6 +1,4 @@
 # "." is important and equals "source"
-# Functionality of sections described in echo statements
-# Assumes all requirement files are in the execution folder (relative path)
 #region Global Variabels
 # CONF = configuration files folder
 CONF=$SETUP
