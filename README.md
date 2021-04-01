@@ -4,7 +4,7 @@
 ## Bash
 
 ### Openvpn
-[generate_new_client.sh][bash/openvpn/generate_new_client.sh] Автогенерация последовательных клиентов с номером после имени и соовтествующем статическим ip
+[generate_new_client.sh](bash/openvpn/generate_new_client.sh) Автогенерация последовательных клиентов с номером после имени и соовтествующем статическим ip
 
 ### various 
 Несортированные скрипты
